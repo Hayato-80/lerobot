@@ -19,7 +19,6 @@ import time
 from functools import cached_property
 
 from lerobot.cameras import make_cameras_from_configs
-from lerobot.cameras.realsense import RealSenseCamera
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.feetech import (
     FeetechMotorsBus,
@@ -69,19 +68,9 @@ class SOFollower(Robot):
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
-        cam_ft = {}
-        for cam_key, cam in self.cameras.items():
-            # RGB feature
-            cam_ft[cam_key] = (self.config.cameras[cam_key].height, self.config.cameras[cam_key].width, 3)
-            
-            # Add depth feature if camera supports it
-            if type(cam) is RealSenseCamera:
-                if cam.use_depth == True:
-                    # Depth feature
-                    key = f"{cam_key}_depth"
-                    cam_ft[key] = (cam.height, cam.width)
-        
-        return cam_ft
+        return {
+            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
+        }
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
@@ -200,14 +189,6 @@ class SOFollower(Robot):
             obs_dict[cam_key] = cam.read_latest()
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
-            
-            # Read depth if enabled
-            if type(cam) is RealSenseCamera:
-                if cam.use_depth == True:
-                    start = time.perf_counter()
-                    obs_dict[f"{cam_key}_depth"] = cam.read_depth()
-                    dt_ms = (time.perf_counter() - start) * 1e3
-                    logger.debug(f"{self} read {cam_key}_depth: {dt_ms:.1f}ms")
 
         return obs_dict
 

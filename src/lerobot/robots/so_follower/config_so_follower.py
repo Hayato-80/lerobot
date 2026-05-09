@@ -45,7 +45,7 @@ class SOFollowerConfig:
                 fps=30,
                 width=640,
                 height=480,
-                use_depth=True,
+                # use_depth=True,
             ),
             "cam_top": RealSenseCameraConfig(
                 serial_number_or_name="332522071563",

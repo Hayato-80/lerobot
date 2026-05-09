@@ -39,7 +39,7 @@
         }
       },
       "reward_classifier": {
-        "pretrained_path": null,
+        "pretrained_path": "outputs/train/2026-05-09/17-43-36_reward-classifier-so101/checkpoints/last/pretrained_model",
         "success_threshold": 0.5,
         "success_reward": 1.0
       }
@@ -55,10 +55,10 @@
           "type": "intelrealsense",
           "serial_number_or_name": "218622274548",
           "fps": 30,
-          "width": 848,
+          "width": 640,
           "height": 480,
           "color_mode": "rgb",
-          "use_depth": true,
+          "use_depth": false,
           "warmup_s": 1
         },
         "cam_top": {
@@ -88,6 +88,6 @@
     "replay_episode": 0,
     "push_to_hub": false
   },
-  "mode": "record",
+  "mode": "None",
   "device": "cpu"
 }

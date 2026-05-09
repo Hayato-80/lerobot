@@ -36,13 +36,11 @@
   "save_checkpoint": true,
   "seed": 2,
   "resume": false,
-  "fps": 10,
-  "number_of_steps_after_success": 10,
   "optimizer": {
     "grad_clip_norm": 10.0
   },
   "wandb": {
-    "enable": true,
+    "enable": false,
     "project": "reward-classifier-so101",
     "disable_artifact": false
   },
