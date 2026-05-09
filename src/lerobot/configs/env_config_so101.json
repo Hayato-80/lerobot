@@ -1,0 +1,93 @@
+{
+  "env": {
+    "name": "real_robot",
+    "fps": 10,
+    "processor": {
+      "control_mode": "leader",
+      "observation": {
+        "display_cameras": true,
+        "add_joint_velocity_to_observation": false,
+        "add_current_to_observation": false
+      },
+      "image_preprocessing": {
+        "crop_params_dict": {
+          "observation.images.side": [180, 207, 180, 200],
+          "observation.images.front": [180, 250, 120, 150]
+        },
+        "resize_size": [128, 128]
+      },
+      "gripper": {
+        "use_gripper": true,
+        "gripper_penalty": 0.0
+      },
+      "reset": {
+        "reset_time_s": 5.0,
+        "control_time_s": 20.0,
+        "terminate_on_success": true
+      },
+      "inverse_kinematics": {
+        "urdf_path": "/home/klab/ws/SO-ARM100/Simulation/SO101/so101_new_calib.urdf",
+        "target_frame_name": "gripper",
+        "end_effector_bounds": {
+          "min": [0.0361, -0.2036, 0.0654],
+          "max": [0.3403, 0.1923, 0.3591]
+        },
+        "end_effector_step_sizes": {
+          "x": 0.02,
+          "y": 0.02,
+          "z": 0.02
+        }
+      },
+      "reward_classifier": {
+        "pretrained_path": null,
+        "success_threshold": 0.5,
+        "success_reward": 1.0
+      }
+    },
+    "robot": {
+      "type": "so101_follower",
+      "port": "/dev/ttyACM0",
+      "id": "white",
+      "disable_torque_on_disconnect": true,
+      "use_degrees": true,
+      "cameras": {
+        "cam_follower": {
+          "type": "intelrealsense",
+          "serial_number_or_name": "218622274548",
+          "fps": 30,
+          "width": 848,
+          "height": 480,
+          "color_mode": "rgb",
+          "use_depth": true,
+          "warmup_s": 1
+        },
+        "cam_top": {
+          "type": "intelrealsense",
+          "serial_number_or_name": "332522071563",
+          "fps": 30,
+          "width": 640,
+          "height": 480,
+          "color_mode": "rgb",
+          "use_depth": false,
+          "warmup_s": 1
+        }
+      }
+    },
+    "teleop": {
+      "type": "so101_leader",
+      "port": "/dev/ttyACM1",
+      "id": "black",
+      "use_degrees": true
+    }
+  },
+  "dataset": {
+    "repo_id": "hayato/pick_and_place",
+    "root": null,
+    "task": "pick_and_place",
+    "num_episodes_to_record": 10,
+    "replay_episode": 0,
+    "push_to_hub": false
+  },
+  "mode": "record",
+  "device": "cpu"
+}
