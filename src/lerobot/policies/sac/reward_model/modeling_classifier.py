@@ -108,10 +108,13 @@ class Classifier(PreTrainedPolicy):
     def __init__(
         self,
         config: RewardClassifierConfig,
-        # **kwargs,
+        **kwargs,
     ):
         from transformers import AutoModel
 
+        # Accept optional factory kwargs (e.g. dataset_stats, dataset_meta) for compatibility
+        _ = kwargs
+        
         super().__init__(config)
         self.config = config
 
@@ -205,6 +208,8 @@ class Classifier(PreTrainedPolicy):
     def _get_encoder_output(self, x: torch.Tensor, image_key: str) -> torch.Tensor:
         """Extract the appropriate output from the encoder."""
         with torch.no_grad():
+            device = next(self.parameters()).device
+            x = x.to(device)
             if self.is_cnn:
                 # The HF ResNet applies pooling internally
                 outputs = self.encoders[image_key](x)
@@ -274,8 +279,9 @@ class Classifier(PreTrainedPolicy):
         # batch = self.normalize_inputs(batch)
         # batch = self.normalize_targets(batch)
 
-        # Extract images from batch dict
-        images = [batch[key] for key in self.config.input_features if key.startswith(OBS_IMAGE)]
+        # Extract images from batch dict and move to device
+        device = next(self.parameters()).device
+        images = [batch[key].to(device) for key in self.config.input_features if key.startswith(OBS_IMAGE)]
 
         if self.config.num_classes == 2:
             probs = self.predict(images).probabilities

@@ -207,10 +207,14 @@ class RobotEnv(gym.Env):
         self.observation_space = gym.spaces.Dict(observation_spaces)
 
         # Define the action space.
+        import logging as log_module
+        logger = log_module.getLogger(__name__)
+        
         if self.control_mode == "leader":
             # Leader arm: direct joint positions, one per motor (including gripper).
             # Bounds are derived from the follower's motor normalization modes, which
             # must match the leader's modes for positions to be compatible.
+            logger.info(f"[ENV_SETUP] Leader mode: motors = {list(self.robot.bus.motors.keys())}")
             low, high = [], []
             for motor in self.robot.bus.motors.values():
                 if motor.norm_mode == MotorNormMode.DEGREES:
@@ -223,6 +227,7 @@ class RobotEnv(gym.Env):
                     low.append(0.0)
                     high.append(100.0)
             action_dim = len(low)
+            logger.info(f"[ENV_SETUP] Leader mode: action_dim = {action_dim}, bounds = {len(low)} motors")
             bounds = {"min": np.array(low, dtype=np.float32), "max": np.array(high, dtype=np.float32)}
         else:
             # Gamepad/keyboard EE: delta end-effector control
@@ -234,6 +239,7 @@ class RobotEnv(gym.Env):
                 action_dim += 1
                 bounds["min"] = np.concatenate([bounds["min"], [0]])
                 bounds["max"] = np.concatenate([bounds["max"], [2]])
+            logger.info(f"[ENV_SETUP] Gamepad mode: action_dim = {action_dim} (gripper={self.use_gripper})")
 
         self.action_space = gym.spaces.Box(
             low=bounds["min"],
@@ -241,6 +247,7 @@ class RobotEnv(gym.Env):
             shape=(action_dim,),
             dtype=np.float32,
         )
+        logger.info(f"[ENV_SETUP] Final action space shape: {self.action_space.shape}")
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
@@ -584,8 +591,37 @@ def step_env_and_process_transition(
     transition[TransitionKey.OBSERVATION] = (
         env.get_raw_joint_positions() if hasattr(env, "get_raw_joint_positions") else {}
     )
+    
+    # DEBUG: Log action shape before processor
+    import logging as log_module
+    logger = log_module.getLogger(__name__)
+    if isinstance(action, torch.Tensor):
+        logger.info(f"[STEP_ENV] Policy action shape: {action.shape}, dtype: {action.dtype}")
+    
     processed_action_transition = action_processor(transition)
     processed_action = processed_action_transition[TransitionKey.ACTION]
+    
+    # DEBUG: Log action shape after processor
+    if isinstance(processed_action, torch.Tensor):
+        logger.info(f"[STEP_ENV] Processed action shape (torch): {processed_action.shape}")
+    elif isinstance(processed_action, np.ndarray):
+        logger.info(f"[STEP_ENV] Processed action shape (numpy): {processed_action.shape}")
+    else:
+        logger.info(f"[STEP_ENV] Processed action type: {type(processed_action)}, value: {processed_action}")
+
+    # If action has a singleton batch dimension (1, D), squeeze it to (D,)
+    if isinstance(processed_action, torch.Tensor):
+        if processed_action.dim() > 1 and processed_action.shape[0] == 1:
+            processed_action = processed_action.squeeze(0)
+    elif isinstance(processed_action, np.ndarray):
+        if processed_action.ndim > 1 and processed_action.shape[0] == 1:
+            processed_action = np.squeeze(processed_action, axis=0)
+    
+    # DEBUG: Log final action before env.step()
+    if isinstance(processed_action, torch.Tensor):
+        logger.info(f"[STEP_ENV] Final action shape (torch): {processed_action.shape}")
+    elif isinstance(processed_action, np.ndarray):
+        logger.info(f"[STEP_ENV] Final action shape (numpy): {processed_action.shape}")
 
     obs, reward, terminated, truncated, info = env.step(processed_action)
 
@@ -762,7 +798,7 @@ def control_loop(
 
         if cfg.mode == "record":
             observations = {
-                k: v.squeeze(0).cpu()
+                k: v.squeeze(0).cpu().numpy() if isinstance(v, torch.Tensor) else v
                 for k, v in transition[TransitionKey.OBSERVATION].items()
                 if isinstance(v, torch.Tensor)
             }
@@ -770,10 +806,18 @@ def control_loop(
             action_to_record = transition[TransitionKey.COMPLEMENTARY_DATA].get(
                 "teleop_action", transition[TransitionKey.ACTION]
             )
+            # Convert torch tensors to numpy and handle scalar conversion
+            if isinstance(action_to_record, torch.Tensor):
+                action_to_record = action_to_record.squeeze(0).cpu().numpy()
+            
+            reward_val = transition[TransitionKey.REWARD]
+            if isinstance(reward_val, torch.Tensor):
+                reward_val = reward_val.cpu().item()
+                
             frame = {
                 **observations,
-                ACTION: action_to_record.cpu(),
-                REWARD: np.array([transition[TransitionKey.REWARD]], dtype=np.float32),
+                ACTION: action_to_record,
+                REWARD: np.array([reward_val], dtype=np.float32),
                 DONE: np.array([terminated or truncated], dtype=bool),
             }
             if use_gripper:

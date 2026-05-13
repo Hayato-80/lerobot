@@ -33,6 +33,7 @@ from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_STATE
 from ..pretrained import PreTrainedPolicy
 from ..utils import get_device_from_parameters
 from .configuration_sac import SACConfig, is_image_feature
+from .processor_sac import make_sac_pre_post_processors
 
 DISCRETE_DIMENSION_INDEX = -1  # Gripper is always the last dimension
 
@@ -57,6 +58,7 @@ class SACPolicy(
         self._init_critics(continuous_action_dim)
         self._init_actor(continuous_action_dim)
         self._init_temperature()
+        _, self.postprocessor = make_sac_pre_post_processors(config, dataset_stats=config.dataset_stats)
 
     def get_optim_params(self) -> dict:
         optim_params = {
@@ -96,7 +98,7 @@ class SACPolicy(
             discrete_action = torch.argmax(discrete_action_value, dim=-1, keepdim=True)
             actions = torch.cat([actions, discrete_action], dim=-1)
 
-        return actions
+        return self.postprocessor.process_action(actions)
 
     def critic_forward(
         self,

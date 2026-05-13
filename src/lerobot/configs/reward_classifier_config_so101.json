@@ -7,7 +7,7 @@
     "type": "reward_classifier",
     "model_name": "helper2424/resnet10",
     "model_type": "cnn",
-    "num_cameras": 1,
+    "num_cameras": 2,
     "num_classes": 2,
     "hidden_dim": 256,
     "dropout_rate": 0.1,
@@ -16,6 +16,14 @@
     "use_amp": true,
     "input_features": {
       "observation.images.cam_follower": {
+        "type": "VISUAL",
+        "shape": [
+          3,
+          128,
+          128
+        ]
+      },
+      "observation.images.cam_top": {
         "type": "VISUAL",
         "shape": [
           3,

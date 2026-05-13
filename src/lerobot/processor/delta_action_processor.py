@@ -53,7 +53,10 @@ class MapTensorToDeltaActionDictStep(ActionProcessorStep):
             "delta_z": action[2].item(),
         }
         if self.use_gripper:
-            delta_action["gripper"] = action[3].item()
+            if hasattr(action, "numel") and action.numel() > 3:
+                delta_action["gripper"] = action[3].item()
+            else:
+                delta_action["gripper"] = 0.0
         return delta_action
 
     def transform_features(
@@ -97,7 +100,7 @@ class MapDeltaActionToRobotActionStep(RobotActionProcessorStep):
         delta_x = action.pop("delta_x")
         delta_y = action.pop("delta_y")
         delta_z = action.pop("delta_z")
-        gripper = action.pop("gripper")
+        gripper = action.pop("gripper", 0.0)
 
         # Determine if the teleoperator is actively providing input
         # Consider enabled if any significant movement delta is detected
