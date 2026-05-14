@@ -21,6 +21,11 @@ from .config_so_follower import (
     SOFollowerRobotConfig,
 )
 from .so_follower import SO100Follower, SO101Follower, SOFollower
+from .so_follower_disturbance_observer import (
+    SO100FollowerWithDisturbanceObserver,
+    SO101FollowerWithDisturbanceObserver,
+    SOFollowerWithDisturbanceObserver,
+)
 
 __all__ = [
     "SO100Follower",
@@ -30,4 +35,7 @@ __all__ = [
     "SOFollower",
     "SOFollowerConfig",
     "SOFollowerRobotConfig",
+    "SOFollowerWithDisturbanceObserver",
+    "SO100FollowerWithDisturbanceObserver",
+    "SO101FollowerWithDisturbanceObserver",
 ]

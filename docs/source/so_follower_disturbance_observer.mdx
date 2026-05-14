@@ -1,0 +1,405 @@
+# Implementing Disturbance Observer for Real SO Follower (SO100/SO101) Control
+
+This guide explains how to implement and integrate a disturbance observer for the SO Follower robots (SO100 and SO101) to estimate external forces/torques and improve control performance.
+
+## Overview
+
+A **disturbance observer** estimates external forces acting on the robot by comparing:
+- **Measured motor current** (proportional to actual torque)
+- **Model predictions** (gravity, friction, inertia effects)
+
+The residual is the estimated disturbance: `τ_dist = τ_measured - τ_model`
+
+**Benefits:**
+- Gravity compensation for dynamic load holding
+- Collision detection for safety
+- Force feedback for interaction control
+- Model error correction
+
+## Quick Start
+
+### 1. Enable Current Feedback in SO Follower (SO100/SO101)
+
+First, ensure your motor bus reads `Present_Current` in observations:
+
+```python
+from lerobot.robots.so_follower import SO100FollowerConfig, SO101FollowerConfig
+from lerobot.robots.so_follower.so_follower_disturbance_observer import SOFollowerWithDisturbanceObserver
+from lerobot.processor.disturbance_observer import DisturbanceObserverStep
+
+# Create robot config (works for both SO100 and SO101)
+config = SO100FollowerConfig(port="/dev/ttyUSB0")
+# or: config = SO101FollowerConfig(port="/dev/ttyUSB0")
+
+# Create robot with disturbance observer support
+robot = SOFollowerWithDisturbanceObserver(config)
+robot.connect()
+
+# Create and configure disturbance observer
+observer = DisturbanceObserverStep(
+    current_to_torque_scale=0.01,  # Nm per mA
+    dt=0.01,  # 100 Hz control loop
+)
+
+# Attach observer to robot
+robot.set_disturbance_observer(observer)
+
+# Now get observations with disturbance estimates
+obs = robot.get_observation()
+print(obs["shoulder_lift.disturbance"])  # Estimated external torque in Nm
+```
+
+### 2. Use Disturbance Estimates in Your Policy
+
+**Extend observations with disturbance feedback:**
+
+```python
+from lerobot.processor.pipeline import PolicyProcessorPipeline
+from lerobot.processor.disturbance_observer import DisturbanceObserverStep
+from lerobot.processor.normalize_processor import NormalizerProcessorStep
+
+# Build processing pipeline with observer
+preprocessor = PolicyProcessorPipeline([
+    # ... existing processors ...
+    NormalizerProcessorStep(...),
+    
+    # Add disturbance observer
+    DisturbanceObserverStep(
+        current_to_torque_scale=0.01,
+        motor_inertia={
+            "shoulder_pan": 0.01,
+            "shoulder_lift": 0.02,  # More mass = more inertia
+            "elbow_flex": 0.01,
+            "wrist_flex": 0.005,
+            "wrist_roll": 0.005,
+            "gripper": 0.002,
+        },
+        gravity_torque={
+            "shoulder_pan": 0.0,
+            "shoulder_lift": 2.5,  # Gravity load at shoulder
+            "elbow_flex": 1.8,
+            "wrist_flex": 0.0,
+            "wrist_roll": 0.0,
+            "gripper": 0.0,
+        },
+    ),
+    DeviceProcessorStep(device="cuda"),
+])
+
+# Your policy now receives disturbance estimates as input
+policy_output = preprocessor(observation)
+```
+
+### 3. Calibrate Gravity Torques with Teleoperation
+
+The calibration step should be done while you teleoperate the arm through representative poses, not with the motors disabled.
+
+```python
+from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
+
+teleop = SO101Leader(SO101LeaderConfig(port="/dev/ttyUSB1"))
+teleop.connect()
+
+for _ in range(1000):
+    teleop_action = teleop.get_action()
+    robot.send_action(teleop_action)
+    obs = robot.get_observation()
+    # sample gravity torques when the arm is briefly stationary
+```
+
+Have the operator move the leader arm slowly and pause at a few poses. Use those stationary samples to estimate the per-joint gravity torque bias.
+
+### 4. Apply Disturbance Compensation in Control
+
+**Real-time compensation during teleoperation or evaluation:**
+
+```python
+from lerobot.robots.so_follower import SO100FollowerConfig
+from so100_disturbance_observer import SO100FollowerWithDisturbanceObserver
+
+robot = SO100FollowerWithDisturbanceObserver(config)
+robot.connect()
+
+# Setup observer
+observer = DisturbanceObserverStep(gravity_torque={"shoulder_lift": 2.5, ...})
+robot.set_disturbance_observer(observer)
+
+# Control loop with compensation
+for step in range(1000):
+    # Get observation with estimated disturbances
+    obs = robot.get_observation()
+    
+    # Run policy to get target positions
+    with torch.no_grad():
+        action = policy(obs)
+    
+    # Apply action WITH disturbance compensation
+    robot.send_action(
+        action,
+        apply_compensation=True,  # Enable compensation
+        compensation_scale=0.8,   # Use 80% of estimated disturbance
+    )
+```
+
+## Advanced: Calibrating Motor Parameters
+
+### Step 1: Measure Motor Constant (Current to Torque)
+
+```python
+# For Feetech STS3215 motors (used in both SO100 & SO101):
+# Typical motor constant: K_t ≈ 0.11 Nm/A = 0.00011 Nm/mA
+
+# Measure by loading motor and reading current feedback
+robot.bus.enable_torque("shoulder_pan")
+robot.bus.write("Goal_Position", "shoulder_pan", 0)  # Move to known position
+
+# Hang known mass M (kg) on robot at distance L (m) from joint
+# Measured torque = M * L * g (Nm)
+# Measured current = I (mA)
+# Motor constant K_t = Torque / Current
+
+# Example: 1 kg at 0.2m creates 1.96 Nm load
+# If motor reads 12000 mA: K_t = 1.96 / 12 = 0.163 Nm/A
+
+observer.current_to_torque_scale = 0.00016  # Nm per mA (adjust per motor)
+```
+
+### Step 2: Calibrate Gravity Torques
+
+```python
+# Connect the leader teleoperator and move through a few held poses
+from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
+
+teleop = SO101Leader(SO101LeaderConfig(port="/dev/ttyUSB1"))
+teleop.connect()
+
+gravity_samples = {joint: [] for joint in observer.joint_names}
+previous_positions = {}
+
+for _ in range(1000):
+    teleop_action = teleop.get_action()
+    robot.send_action(teleop_action)
+    obs = robot.get_observation()
+
+    for joint in observer.joint_names:
+        pos_key = f"{joint}.pos"
+        current_key = f"{joint}.current"
+        if pos_key not in obs or current_key not in obs:
+            continue
+        pos = float(obs[pos_key])
+        if joint in previous_positions and abs(pos - previous_positions[joint]) < 0.25:
+            tau_gravity = float(obs[current_key]) * observer.current_to_torque_scale
+            gravity_samples[joint].append(tau_gravity)
+        previous_positions[joint] = pos
+
+for joint, samples in gravity_samples.items():
+    if samples:
+        observer.gravity_torque[joint] = float(np.median(samples))
+        print(f"{joint}: {observer.gravity_torque[joint]:.3f} Nm gravity torque")
+```
+
+### Step 3: Calibrate Motor Inertia
+
+```python
+# This requires system identification - test response to step commands
+# Simpler approach: Use motor datasheet values
+
+# Feetech STS3215 typical inertia: ~0.001 kg*m^2
+# Adjust based on joint configuration (attached payloads, gear ratios)
+
+observer.motor_inertia = {
+    "shoulder_pan": 0.012,
+    "shoulder_lift": 0.015,  # Higher due to gravity load
+    "elbow_flex": 0.012,
+    "wrist_flex": 0.006,
+    "wrist_roll": 0.006,
+    "gripper": 0.002,
+}
+```
+
+## Integration with LeRobot Pipelines
+
+### Option 1: Processor Pipeline (Recommended for Training)
+
+```python
+from lerobot.datasets import LeRobotDataset
+from lerobot.processor.pipeline import DataProcessorPipeline
+
+# Load dataset
+dataset = LeRobotDataset("your_dataset_id")
+
+# Create preprocessing pipeline with disturbance observer
+pipeline_config = {
+    "steps": [
+        {
+            "type": "rename_observations",
+            "rename_map": {"joint_position": "observation"},
+        },
+        {
+            "type": "disturbance_observer",
+            "current_to_torque_scale": 0.00016,
+            "gravity_torque": {...},
+            "motor_inertia": {...},
+            "dt": 0.01,
+        },
+        {
+            "type": "normalize",
+            "stats": dataset.stats,
+        },
+    ]
+}
+
+# Pipeline processes all data before training
+pipeline = DataProcessorPipeline.from_config(pipeline_config)
+processed_transitions = [pipeline(t) for t in dataset]
+```
+
+### Option 2: Policy Server Integration
+
+```python
+from lerobot.async_inference.policy_server import PolicyServer
+
+# Server automatically applies preprocessing to observations
+server_config = {
+    "policy_model_id": "your_policy_model",
+    "preprocessor_config": {
+        "disturbance_observer": {
+            "current_to_torque_scale": 0.00016,
+            "gravity_torque": {...},
+        }
+    },
+}
+
+server = PolicyServer(server_config)
+# Server now estimates disturbances and passes to policy
+```
+
+### Option 3: Evaluation Loop
+
+```python
+from lerobot.scripts.lerobot_eval import make_eval_callable
+
+eval_callable = make_eval_callable(
+    policy,
+    dataset,
+    processor_kwargs={
+        "disturbance_observer": {
+            "include_in_observation": True,
+            "gravity_torque": {...},
+        }
+    },
+)
+
+# Evaluation includes disturbance estimation
+results = eval_callable()
+```
+
+## Real Hardware Tips
+
+### Motor Bus Configuration
+
+Ensure your motor bus includes `Present_Current` and `Present_Load` in readable parameters:
+
+```python
+# In SO100 robot initialization
+class SO100FollowerWithDisturbanceObserver(SO100Follower):
+    def get_observation(self):
+        obs = super().get_observation()
+        
+        # Add current feedback
+        try:
+            current_dict = self.bus.sync_read("Present_Current")
+            obs.update({f"{motor}.current": val for motor, val in current_dict.items()})
+        except:
+            logger.warning("Could not read Present_Current from motors")
+        
+        return obs
+```
+
+### Safety Considerations
+
+```python
+# Always set limits on disturbance estimates
+observer = DisturbanceObserverStep(
+    max_disturbance=10.0,  # Nm - clip unrealistic estimates
+    include_in_observation=True,
+)
+
+# Monitor disturbance for collision detection
+def collision_detection(obs, threshold_nm=5.0):
+    for joint in ["shoulder_pan", "shoulder_lift", "elbow_flex"]:
+        if abs(obs.get(f"{joint}.disturbance", 0)) > threshold_nm:
+            logger.warning(f"Collision detected on {joint}!")
+            return True
+    return False
+```
+
+### Performance Optimization
+
+```python
+# Reduce observation read frequency
+observer = DisturbanceObserverStep(
+    velocity_filter_window=5,  # Smooth noisy velocity estimates
+    dt=0.01,  # Match your control frequency
+)
+
+# Example: 100 Hz control loop
+for t in range(timesteps):
+    start = time.perf_counter()
+    
+    obs = robot.get_observation()  # ~20-50ms for current reading
+    action = policy(obs)  # ~10-30ms for neural net
+    robot.send_action(action)  # ~5-10ms for serial write
+    
+    # Busy-wait to maintain control frequency
+    elapsed = time.perf_counter() - start
+    if elapsed < 0.01:
+        time.sleep(0.01 - elapsed)
+```
+
+## Troubleshooting
+
+### Issue: Disturbance estimates are all zeros
+
+**Solution:** Verify motor current feedback is working:
+```python
+obs = robot.get_observation()
+print(obs.keys())  # Check for "{joint}.current" keys
+print(obs["shoulder_lift.current"])  # Should be non-zero when loaded
+```
+
+### Issue: Noisy/unstable estimates
+
+**Solution:** Increase velocity filter window and check motor constants:
+```python
+observer = DisturbanceObserverStep(
+    velocity_filter_window=7,  # Increase smoothing
+    dt=0.01,
+)
+# Also verify current_to_torque_scale is correct
+```
+
+### Issue: Compensation makes motion worse
+
+**Solution:** Reduce compensation scale and verify parameter calibration:
+```python
+# Start with low compensation
+robot.send_action(action, apply_compensation=True, compensation_scale=0.1)
+
+# Gradually increase if stable:
+# 0.1 → 0.3 → 0.5 → 0.8 → 1.0
+```
+
+## References
+
+- **Disturbance Observer Theory**: Ohnishi et al., IEEE Trans. Industrial Electronics, 1996
+- **SO100 Motor Specs**: Feetech STS3215 datasheet
+- **LeRobot Processor Architecture**: [docs/source/implement_your_own_processor.mdx](../docs/source/implement_your_own_processor.mdx)
+
+## Next Steps
+
+1. **Calibrate your specific SO100** using the calibration scripts above
+2. **Start with `DisturbanceObserverStep`** for basic estimation
+3. **Graduate to `AdvancedDisturbanceObserverStep`** when integrating kinematics
+4. **Use disturbance feedback** in your policy training or teleoperation loop
+5. **Monitor safety** with collision detection based on disturbance thresholds
